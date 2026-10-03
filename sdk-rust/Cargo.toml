@@ -18,7 +18,7 @@ doctest = false
 
 [dependencies]
 # Core GraphLite library
-graphlite = { path = "../graphlite", version = "0.0.1" }
+graphlite = { path = "../graphlite", version = "0.1.0" }
 
 # Re-export commonly needed dependencies
 serde = { workspace = true }
