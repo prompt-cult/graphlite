@@ -137,32 +137,177 @@ jobs:
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
 
+  # The C ABI library, packaged per target for embedding: end-user apps link
+  # graphlite without the Rust source tree. Modelled on lua-lunet/uvrr-core's
+  # release lane (package -> upload-artifact release-<key> -> publish job that
+  # verifies every expected archive before attaching it).
+  build-cdylib:
+    name: Build cdylib - ${{ matrix.target_key }}
+    needs: resolve-tag
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+            target_key: macos-aarch64
+          - os: blacksmith-6vcpu-macos-15
+            target: x86_64-apple-darwin
+            target_key: macos-x86_64
+          - os: blacksmith-4vcpu-ubuntu-2404-arm
+            target: aarch64-unknown-linux-gnu
+            target_key: linux-aarch64
+          - os: blacksmith-4vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+            target_key: linux-x86_64
+          # Windows stays commented out until the four lanes above are green.
+          # - os: blacksmith-4vcpu-windows-2025
+          #   target: x86_64-pc-windows-msvc
+          #   target_key: windows-x86_64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo git
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-git-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-ffi-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-build-ffi-
+
+      - name: Stamp version from tag
+        run: |
+          cargo install cargo-edit --locked
+          cargo set-version --workspace "${{ needs.resolve-tag.outputs.version }}"
+
+      - name: Build cdylib and staticlib
+        run: cargo build --release --locked --target ${{ matrix.target }} -p graphlite-ffi
+
+      - name: Package release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="graphlite-ffi-${{ matrix.target_key }}"
+          mkdir -p "$stage"
+          out="target/${{ matrix.target }}/release"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "$out/libgraphlite_ffi.dylib" "$out/libgraphlite_ffi.a" "$stage/"
+          else
+            cp "$out/libgraphlite_ffi.so" "$out/libgraphlite_ffi.a" "$stage/"
+          fi
+          # cbindgen writes this next to the crate; it is the C header an
+          # embedding app compiles against.
+          cp graphlite-ffi/graphlite.h "$stage/"
+          tar czf "${stage}.tar.gz" -C "$stage" .
+
+      # The archive is only useful if a C app can compile against the header
+      # and link the library. This catches a cbindgen regression that a Rust
+      # build cannot: the header is generated, not compiled by cargo.
+      - name: Link test against the packaged archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p linktest
+          cat > linktest/main.c <<'EOF'
+          #include "graphlite.h"
+          #include <stdio.h>
+          int main(void) {
+            const char *v = graphlite_version();
+            printf("linked: %s\n", v ? v : "(null)");
+            return v ? 0 : 1;
+          }
+          EOF
+          cc linktest/main.c -I "$stage" -L "$stage" -lgraphlite_ffi -o linktest/embed
+          LD_LIBRARY_PATH="$stage" DYLD_LIBRARY_PATH="$stage" ./linktest/embed
+
+      - name: Generate checksum
+        run: |
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            shasum -a 256 graphlite-ffi-${{ matrix.target_key }}.tar.gz > graphlite-ffi-${{ matrix.target_key }}.tar.gz.sha256
+          else
+            sha256sum graphlite-ffi-${{ matrix.target_key }}.tar.gz > graphlite-ffi-${{ matrix.target_key }}.tar.gz.sha256
+          fi
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target_key }}
+          path: |
+            graphlite-ffi-${{ matrix.target_key }}.tar.gz
+            graphlite-ffi-${{ matrix.target_key }}.tar.gz.sha256
+          retention-days: 5
+
   # PyPI publishing is tracked separately; it needs a PYPI_API_TOKEN secret
   # that this repo does not have, so the wheel lane is not part of this
   # workflow.
 
   create-release:
     name: Create Release
-    needs: [resolve-tag, build-release]
+    needs: [resolve-tag, build-release, build-cdylib]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download cdylib archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+
+      # Loud on purpose: a release that silently ships three of four
+      # platform archives is worse than a failed run.
+      - name: Verify expected archives
+        run: |
+          set -euo pipefail
+          ls -la release-assets
+          for target in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64; do
+            test -f "release-assets/graphlite-ffi-${target}.tar.gz" || {
+              echo "missing release asset: graphlite-ffi-${target}.tar.gz" >&2
+              exit 1
+            }
+          done
+
       # softprops/action-gh-release@v2 replaces the deprecated
       # actions/create-release@v1 + actions/upload-release-asset@v1 pair from
-      # the prior art. Assets are attached by the build-release job against
-      # the same tag; this final pass attaches the release body. Files
-      # already uploaded are left untouched.
+      # the prior art. Binaries are attached by the build-release job against
+      # the same tag; this final pass attaches the archives and the release
+      # body. Files already uploaded are left untouched.
       - name: Create / annotate release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.resolve-tag.outputs.tag }}
           generate_release_notes: true
+          files: release-assets/*
           body: |
             ## GraphLite ${{ needs.resolve-tag.outputs.tag }}
 
-            ### Downloads
+            ### CLI binary
             - Linux (x86_64): `graphlite-linux-x86_64`
             - Linux (ARM64): `graphlite-linux-aarch64`
             - macOS (x86_64): `graphlite-macos-x86_64`
@@ -170,11 +315,20 @@ jobs:
 
             SHA-256 checksums are provided for every asset (`*.sha256`).
 
-            ### Installation
             ```bash
             chmod +x graphlite-*
             sudo mv graphlite-<os>-<arch> /usr/local/bin/graphlite
             ```
+
+            ### C ABI library (for embedding)
+            `graphlite-ffi-<target>.tar.gz` per target, each holding the
+            cdylib, the staticlib and the cbindgen-generated `graphlite.h`, so an
+            end-user app can link graphlite without the Rust source tree.
+
+            - Linux (x86_64): `graphlite-ffi-linux-x86_64.tar.gz`
+            - Linux (ARM64): `graphlite-ffi-linux-aarch64.tar.gz`
+            - macOS (x86_64): `graphlite-ffi-macos-x86_64.tar.gz`
+            - macOS (Apple Silicon): `graphlite-ffi-macos-aarch64.tar.gz`
 
             ### Changes
             See the release notes below for the changes in this release.

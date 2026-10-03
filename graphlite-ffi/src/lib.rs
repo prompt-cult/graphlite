@@ -26,6 +26,8 @@ use std::sync::Arc;
 /// Opaque handle to a GraphLite database instance
 ///
 /// This handle wraps a QueryCoordinator and must be freed with `graphlite_close`
+///
+/// cbindgen:no-export
 #[repr(C)]
 pub struct GraphLiteDB {
     coordinator: Arc<QueryCoordinator>,
