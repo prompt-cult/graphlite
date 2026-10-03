@@ -15,6 +15,22 @@
 //! - Returned strings are freed with `graphlite_free_string`
 //! - Database handles are closed with `graphlite_close`
 //! - No concurrent access to the same handle without synchronization
+//!
+//! # String ownership, and the binding trap
+//!
+//! Every `char *` this library returns is owned by the caller and must be
+//! passed to `graphlite_free_string` **exactly once**. It must never be freed
+//! by any other means (the language's `free`, `delete`, a GC, or a Python
+//! `bytes` object's own release path), and it must not be freed twice.
+//!
+//! Language bindings must keep the raw pointer intact until it is freed. In
+//! Python `ctypes` this means `restype = ctypes.c_void_p`, never
+//! `restype = ctypes.c_char_p`: `c_char_p` copies the string into a Python
+//! `bytes` object and discards the original pointer, so handing that object
+//! back to `graphlite_free_string` frees memory this library never allocated
+//! and aborts the process. Likewise every pointer-returning function needs
+//! its `restype` set to `c_void_p`, or `ctypes` truncates the pointer to a C
+//! `int`.
 
 use graphlite::QueryCoordinator;
 use std::ffi::{CStr, CString};

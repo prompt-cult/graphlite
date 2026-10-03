@@ -3,6 +3,8 @@
 
 #pragma once
 
+typedef struct GraphLiteDB GraphLiteDB;
+
 /**
  * Error codes returned by FFI functions
  */
