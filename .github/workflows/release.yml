@@ -149,22 +149,36 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # cc_arch / exec_test drive the link test: a cross-built library is
+          # linked with the target arch explicitly (host cc defaults to the
+          # runner's own arch), and only executed when the arch matches the
+          # host, since Rosetta may not be installed.
           - os: blacksmith-6vcpu-macos-15
             target: aarch64-apple-darwin
             target_key: macos-aarch64
+            cc_arch: arm64
+            exec_test: true
           - os: blacksmith-6vcpu-macos-15
             target: x86_64-apple-darwin
             target_key: macos-x86_64
+            cc_arch: x86_64
+            exec_test: false
           - os: blacksmith-4vcpu-ubuntu-2404-arm
             target: aarch64-unknown-linux-gnu
             target_key: linux-aarch64
+            cc_arch: ''
+            exec_test: true
           - os: blacksmith-4vcpu-ubuntu-2404
             target: x86_64-unknown-linux-gnu
             target_key: linux-x86_64
+            cc_arch: ''
+            exec_test: true
           # Windows stays commented out until the four lanes above are green.
           # - os: blacksmith-4vcpu-windows-2025
           #   target: x86_64-pc-windows-msvc
           #   target_key: windows-x86_64
+          #   cc_arch: ''
+          #   exec_test: false
 
     steps:
       - name: Checkout code
@@ -244,8 +258,17 @@ jobs:
             return v ? 0 : 1;
           }
           EOF
-          cc linktest/main.c -I "$stage" -L "$stage" -lgraphlite_ffi -o linktest/embed
-          LD_LIBRARY_PATH="$stage" DYLD_LIBRARY_PATH="$stage" ./linktest/embed
+          CC_ARCH='${{ matrix.cc_arch }}'
+          if [ -n "$CC_ARCH" ]; then
+            cc linktest/main.c -I "$stage" -L "$stage" -arch "$CC_ARCH" -lgraphlite_ffi -o linktest/embed
+          else
+            cc linktest/main.c -I "$stage" -L "$stage" -lgraphlite_ffi -o linktest/embed
+          fi
+          if [ '${{ matrix.exec_test }}' = 'true' ]; then
+            LD_LIBRARY_PATH="$stage" DYLD_LIBRARY_PATH="$stage" ./linktest/embed
+          else
+            echo "linked for ${CC_ARCH}; not executed (host $(uname -m), cross-built)"
+          fi
 
       - name: Generate checksum
         run: |
