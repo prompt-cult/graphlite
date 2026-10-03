@@ -566,6 +566,7 @@ pub struct Timer {
 }
 
 impl Timer {
+    #[allow(dead_code)] // ROADMAP v0.4.0 - reached only via Default (see ROADMAP.md §6)
     pub fn new() -> Self {
         Self {
             start: Instant::now(),
