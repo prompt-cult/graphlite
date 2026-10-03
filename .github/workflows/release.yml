@@ -14,76 +14,69 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
-  create-release:
-    name: Create Release
+  verify-tag:
+    name: Verify tag matches workspace version
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get version from tag
-        id: get_version
+      - name: Resolve tag
+        id: resolve
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.tag }}"
+            TAG="${{ github.event.inputs.tag }}"
           else
-            VERSION="${GITHUB_REF#refs/tags/}"
+            TAG="${GITHUB_REF#refs/tags/}"
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${VERSION}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}"
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.get_version.outputs.version }}
-          release_name: GraphLite ${{ steps.get_version.outputs.version }}
-          draft: false
-          prerelease: false
-          body: |
-            ## GraphLite ${{ steps.get_version.outputs.version }}
-
-            ### Downloads
-            - Linux (x86_64): `graphlite-linux-x86_64`
-            - macOS (x86_64): `graphlite-macos-x86_64`
-            - macOS (ARM64): `graphlite-macos-aarch64`
-
-            ### Installation
-            ```bash
-            # Linux/macOS
-            chmod +x graphlite-*
-            sudo mv graphlite-* /usr/local/bin/graphlite
-            ```
-
-            ### Changes
-            See the commit history for detailed changes.
+      - name: Tag must match manifest version
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          VERSION="v$(sed -n '/^\[workspace.package\]/,/^\[/p' Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p')"
+          echo "workspace version: ${VERSION}"
+          echo "tag:               ${TAG}"
+          if [ "${TAG}" != "${VERSION}" ]; then
+            echo "::error::tag ${TAG} does not match workspace version ${VERSION} — bump Cargo.toml and commit before tagging"
+            exit 1
+          fi
 
   build-release:
-    name: Build Release - ${{ matrix.target }}
-    needs: create-release
+    name: Build Release - ${{ matrix.asset_name }}
+    needs: verify-tag
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: blacksmith-4vcpu-ubuntu-2404
-            artifact_name: graphlite
-            asset_name: graphlite-linux-x86_64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: graphlite
-            asset_name: graphlite-macos-x86_64
-          - os: macos-latest
+          # blacksmith-6vcpu-macos-15 is an arm64 (Apple Silicon) runner, so
+          # macos-aarch64 is a native build and macos-x86_64 is a
+          # cross-compile via the installed target.
+          - os: blacksmith-6vcpu-macos-15
             target: aarch64-apple-darwin
-            artifact_name: graphlite
             asset_name: graphlite-macos-aarch64
+          - os: blacksmith-6vcpu-macos-15
+            target: x86_64-apple-darwin
+            asset_name: graphlite-macos-x86_64
+          - os: blacksmith-4vcpu-ubuntu-2404-arm
+            target: aarch64-unknown-linux-gnu
+            asset_name: graphlite-linux-aarch64
+          - os: blacksmith-4vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+            asset_name: graphlite-linux-x86_64
+          # Windows lanes stay commented out until macOS + linux aarch64 +
+          # linux x86_64 are all green on a released tag.
+          # - os: blacksmith-4vcpu-windows-2025
+          #   target: x86_64-pc-windows-msvc
+          #   asset_name: graphlite-windows-x86_64
 
     steps:
       - name: Checkout code
@@ -94,135 +87,94 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install build dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
-
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
 
-      - name: Cache cargo index
+      - name: Cache cargo git
         uses: actions/cache@v4
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-git-
 
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-build-release-
 
       - name: Build release binary
-        run: |
-          ./scripts/build_all.sh --release
+        run: cargo build --release --locked --target ${{ matrix.target }} -p gql-cli
 
-      - name: Strip binary (Linux/macOS)
-        if: matrix.os != 'windows-latest'
-        run: strip target/release/${{ matrix.artifact_name }}
+      - name: Strip binary
+        run: strip target/${{ matrix.target }}/release/graphlite
 
       - name: Rename binary
         run: |
-          cp target/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.asset_name }}
-          asset_name: ${{ matrix.asset_name }}
-          asset_content_type: application/octet-stream
+          cp target/${{ matrix.target }}/release/graphlite ${{ matrix.asset_name }}
 
       - name: Generate checksum
         run: |
-          if [ "${{ matrix.os }}" == "macos-latest" ]; then
+          if [ "$RUNNER_OS" == "macOS" ]; then
             shasum -a 256 ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
           else
             sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
           fi
 
-      - name: Upload checksum
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.asset_name }}.sha256
-          asset_name: ${{ matrix.asset_name }}.sha256
-          asset_content_type: text/plain
+          tag_name: ${{ needs.verify-tag.outputs.tag }}
+          files: |
+            ${{ matrix.asset_name }}
+            ${{ matrix.asset_name }}.sha256
 
-  build-python-wheels:
-    name: Build Python Wheels - ${{ matrix.os }} - Python ${{ matrix.python-version }}
-    needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [blacksmith-4vcpu-ubuntu-2404, macos-latest]
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+  # PyPI publishing is tracked separately; it needs a PYPI_API_TOKEN secret
+  # that this repo does not have, so the wheel lane is not part of this
+  # workflow.
 
+  create-release:
+    name: Create Release
+    needs: [verify-tag, build-release]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # softprops/action-gh-release@v2 replaces the deprecated
+      # actions/create-release@v1 + actions/upload-release-asset@v1 pair from
+      # the prior art. Assets are attached by the build-release job against
+      # the same tag; this final pass attaches the release body. Files
+      # already uploaded are left untouched.
+      - name: Create / annotate release
+        uses: softprops/action-gh-release@v2
         with:
-          python-version: ${{ matrix.python-version }}
+          tag_name: ${{ needs.verify-tag.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ## GraphLite ${{ needs.verify-tag.outputs.tag }}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+            ### Downloads
+            - Linux (x86_64): `graphlite-linux-x86_64`
+            - Linux (ARM64): `graphlite-linux-aarch64`
+            - macOS (x86_64): `graphlite-macos-x86_64`
+            - macOS (Apple Silicon): `graphlite-macos-aarch64`
 
-      - name: Install build dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+            SHA-256 checksums are provided for every asset (`*.sha256`).
 
-      - name: Build Rust FFI library
-        run: |
-          cd graphlite-ffi
-          cargo build --release
+            ### Installation
+            ```bash
+            chmod +x graphlite-*
+            sudo mv graphlite-<os>-<arch> /usr/local/bin/graphlite
+            ```
 
-      - name: Install Python dependencies
-        run: |
-          cd bindings/python
-          pip install build wheel setuptools
-
-      - name: Build Python wheel
-        run: |
-          cd bindings/python
-          python -m build
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-wheel-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: bindings/python/dist/*.whl
-          retention-days: 7
-
-  publish-pypi:
-    name: Publish to PyPI
-    needs: [create-release, build-python-wheels]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Download all wheel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: python-wheel-*
-          path: dist
-          merge-multiple: true
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          skip-existing: true
+            ### Changes
+            See the release notes below for the changes in this release.

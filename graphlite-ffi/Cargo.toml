@@ -1,6 +1,6 @@
 [package]
 name = "graphlite-ffi"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["DeepGraph Inc."]
@@ -12,7 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]  # Support dynamic, static, and Rus
 doctest = false
 
 [dependencies]
-graphlite = { path = "../graphlite", version = "0.0.1" }
+graphlite = { path = "../graphlite", version = "0.1.0" }
 libc = "0.2"
 serde_json = "1.0"
 

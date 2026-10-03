@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Core library dependency
-graphlite = { path = "../graphlite", version = "0.0.1" }
+graphlite = { path = "../graphlite", version = "0.1.0" }
 
 # CLI-specific dependencies
 clap = { workspace = true }
