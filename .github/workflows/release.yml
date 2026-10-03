@@ -231,6 +231,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Each `run:` is its own shell: the staging dir name is rebuilt
+          # here rather than inherited from the packaging step.
+          stage="graphlite-ffi-${{ matrix.target_key }}"
           mkdir -p linktest
           cat > linktest/main.c <<'EOF'
           #include "graphlite.h"
