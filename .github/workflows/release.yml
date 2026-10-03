@@ -238,9 +238,11 @@ jobs:
           cp graphlite-ffi/graphlite.h "$stage/"
           tar czf "${stage}.tar.gz" -C "$stage" .
 
-      # The archive is only useful if a C app can compile against the header
-      # and link the library. This catches a cbindgen regression that a Rust
-      # build cannot: the header is generated, not compiled by cargo.
+      # The archive is only useful if a C app can compile against the header,
+      # link the library, use the handle type and free what it returns. This
+      # catches regressions a Rust build cannot: the header is generated, not
+      # compiled by cargo, and the string ownership contract is only exercised
+      # across the FFI boundary.
       - name: Link test against the packaged archive
         shell: bash
         run: |
@@ -252,10 +254,41 @@ jobs:
           cat > linktest/main.c <<'EOF'
           #include "graphlite.h"
           #include <stdio.h>
+          #include <stdlib.h>
+
+          /* Uses the handle by its typedef spelling on purpose: the header
+           * documents `GraphLiteDB *`, so if the typedef ever goes missing
+           * again this test stops compiling, which is the point. */
+          static int exercise(const char *dir) {
+            GraphLiteErrorCode err = Success;
+            GraphLiteDB *db = graphlite_open(dir, &err);
+            if (!db) { fprintf(stderr, "open failed err=%d\n", err); return 1; }
+
+            char *sid = graphlite_create_session(db, "linktest", &err);
+            if (!sid) { fprintf(stderr, "session failed err=%d\n", err); graphlite_close(db); return 1; }
+
+            char *result = graphlite_query(db, sid, "CREATE SCHEMA /linktest", &err);
+            if (result) graphlite_free_string(result);
+
+            /* A malformed query must return an error, never crash the
+             * process: this is the FFI half of the bad-input contract. */
+            char *bad = graphlite_query(db, sid, "CREATE SCHEMA unqualified", &err);
+            if (bad) graphlite_free_string(bad);
+
+            /* Every returned string freed exactly once, then the handle. */
+            graphlite_free_string(sid);
+            graphlite_close(db);
+            return 0;
+          }
+
           int main(void) {
             const char *v = graphlite_version();
-            printf("linked: %s\n", v ? v : "(null)");
-            return v ? 0 : 1;
+            printf("version: %s\n", v ? v : "(null)");
+            if (!v) return 1;
+            if (exercise("linktest-db")) return 1;
+            if (exercise("linktest-db-2")) return 1;
+            printf("linked, opened, queried and freed cleanly\n");
+            return 0;
           }
           EOF
           CC_ARCH='${{ matrix.cc_arch }}'
