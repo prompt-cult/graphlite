@@ -44,15 +44,6 @@ typedef enum GraphLiteErrorCode {
 typedef struct Arc_QueryCoordinator Arc_QueryCoordinator;
 
 /**
- * Opaque handle to a GraphLite database instance
- *
- * This handle wraps a QueryCoordinator and must be freed with `graphlite_close`
- */
-typedef struct GraphLiteDB {
-  struct Arc_QueryCoordinator coordinator;
-} GraphLiteDB;
-
-/**
  * Initialize GraphLite database from path
  *
  * # Arguments
