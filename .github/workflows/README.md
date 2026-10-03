@@ -36,48 +36,26 @@ Comprehensive continuous integration pipeline that runs on every push and PR:
 ### 2. Release Workflow ([release.yml](release.yml))
 **Triggers:** Version tags (v*.*.*), Manual dispatch
 
-Automated release pipeline for building and publishing releases:
+Automated release pipeline for building and publishing releases. The tag is the
+single source of truth for the release version: each build job stamps the
+workspace version from the tag with `cargo set-version` before building, so
+`main` carries no release version bumps and no tag-versus-manifest gate exists.
 
-- **Create Release**
-  - GitHub release creation
-  - Release notes generation
+- **Resolve Tag**
+  - Derives the release version from the pushed tag (or dispatch input)
 
 - **Build Release Binaries**
-  - Multi-platform builds:
-    - Linux (x86_64)
-    - macOS (x86_64, ARM64/M1)
+  - Multi-platform builds (Blacksmith runners):
+    - macOS (aarch64, x86_64)
+    - Linux (aarch64, x86_64)
+  - Version stamped from the tag before the build
   - Binary stripping and optimization
   - Checksum generation (SHA256)
   - Asset upload to GitHub releases
 
-- **Python Wheels**
-  - Multi-platform Python wheel builds
-  - Python 3.8 - 3.12 support
-  - PyPI publishing (on tag push)
+Windows lanes stay commented out until the above four are green.
 
-### 3. Python Bindings Workflow ([python-bindings.yml](python-bindings.yml))
-**Triggers:** Push/PR to python bindings code
-
-Tests and validates Python bindings:
-
-- **Test Python Bindings**
-  - Multi-platform testing (Ubuntu, macOS)
-  - Python 3.8 - 3.12 compatibility
-  - FFI library building
-  - pytest test suite
-  - Code coverage
-
-- **Code Quality**
-  - Black formatting checks
-  - mypy type checking
-
-- **Build Wheels**
-  - Wheel building for distribution
-
-- **Quick Start Example**
-  - Validates quick start example works
-
-### 4. Dependency Updates Workflow ([dependencies.yml](dependencies.yml))
+### 3. Dependency Updates Workflow ([dependencies.yml](dependencies.yml))
 **Triggers:** Weekly schedule (Monday 9 AM UTC), Manual dispatch
 
 Automated dependency management:
@@ -91,7 +69,7 @@ Automated dependency management:
   - Weekly security scans
   - Automatic issue creation on vulnerabilities
 
-### 5. Benchmark Workflow ([benchmark.yml](benchmark.yml))
+### 4. Benchmark Workflow ([benchmark.yml](benchmark.yml))
 **Triggers:** Push to main, Pull requests, Manual dispatch
 
 Performance monitoring:

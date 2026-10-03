@@ -1,5 +1,10 @@
 name: Release
 
+# The TAG is the single source of truth for the release version. Each build
+# job stamps the workspace version from the tag via `cargo set-version`
+# before building; main's Cargo.toml version is a dev placeholder that is
+# never bumped for releases. No version-bump PRs, no tag==manifest gate.
+
 on:
   push:
     tags:
@@ -7,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v0.1.0)'
+        description: 'Tag to release (e.g., v0.1.1)'
         required: true
         type: string
 
@@ -18,16 +23,14 @@ permissions:
   contents: write
 
 jobs:
-  verify-tag:
-    name: Verify tag matches workspace version
+  resolve-tag:
+    name: Resolve tag
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Resolve tag
+      - name: Resolve tag and version
         id: resolve
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
@@ -36,22 +39,12 @@ jobs:
             TAG="${GITHUB_REF#refs/tags/}"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Tag: ${TAG}"
-
-      - name: Tag must match manifest version
-        run: |
-          TAG="${{ steps.resolve.outputs.tag }}"
-          VERSION="v$(sed -n '/^\[workspace.package\]/,/^\[/p' Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p')"
-          echo "workspace version: ${VERSION}"
-          echo "tag:               ${TAG}"
-          if [ "${TAG}" != "${VERSION}" ]; then
-            echo "::error::tag ${TAG} does not match workspace version ${VERSION} — bump Cargo.toml and commit before tagging"
-            exit 1
-          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}  Version: ${TAG#v}"
 
   build-release:
     name: Build Release - ${{ matrix.asset_name }}
-    needs: verify-tag
+    needs: resolve-tag
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -111,6 +104,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-build-release-
 
+      - name: Stamp version from tag
+        run: |
+          cargo install cargo-edit --locked
+          cargo set-version --workspace "${{ needs.resolve-tag.outputs.version }}"
+          echo "Stamped version:"
+          rg '^version' Cargo.toml
+
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }} -p gql-cli
 
@@ -132,7 +132,7 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.verify-tag.outputs.tag }}
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
           files: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
@@ -143,7 +143,7 @@ jobs:
 
   create-release:
     name: Create Release
-    needs: [verify-tag, build-release]
+    needs: [resolve-tag, build-release]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout code
@@ -157,10 +157,10 @@ jobs:
       - name: Create / annotate release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.verify-tag.outputs.tag }}
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
           generate_release_notes: true
           body: |
-            ## GraphLite ${{ needs.verify-tag.outputs.tag }}
+            ## GraphLite ${{ needs.resolve-tag.outputs.tag }}
 
             ### Downloads
             - Linux (x86_64): `graphlite-linux-x86_64`
