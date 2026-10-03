@@ -397,8 +397,10 @@ pub unsafe extern "C" fn graphlite_close(db: *mut GraphLiteDB) {
 /// * Must NOT be freed (it's a static string)
 #[no_mangle]
 pub extern "C" fn graphlite_version() -> *const c_char {
-    // Using a static string so it doesn't need to be freed
-    const VERSION: &[u8] = b"0.1.0\0";
+    // Using a static string so it doesn't need to be freed. Derived from the
+    // manifest so it can never disagree with the release: the release
+    // workflow stamps the workspace version from the tag before building.
+    const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
     VERSION.as_ptr() as *const c_char
 }
 
