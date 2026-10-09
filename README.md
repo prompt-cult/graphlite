@@ -7,7 +7,8 @@ GraphLite uses a single binary and is an ideal solution for applications requiri
 
 ## Features
 
-- **ISO GQL Standard** - Full implementation of ISO GQL query language based on grammar optimized from [OpenGQL](https://github.com/opengql/grammar/tree/main) project
+- **ISO GQL Standard** - Full implementation of the ISO GQL query language, "The GQL standard, ISO/IEC 39075:2024 Information technology – Database languages – GQL", published by ISO on 12 April 2024.
+- **opengql parser** - Use the grammar optimized from [OpenGQL](https://github.com/opengql/grammar/tree/main) project
 - **Pattern Matching** - Powerful MATCH clauses for graph traversal
 - **ACID Transactions** - Full transaction support with isolation levels
 - **Embedded Storage** - Sled-based embedded database (no server needed)
