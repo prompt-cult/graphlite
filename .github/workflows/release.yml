@@ -22,10 +22,15 @@ env:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   resolve-tag:
     name: Resolve tag
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
@@ -46,6 +51,7 @@ jobs:
     name: Build Release - ${{ matrix.asset_name }}
     needs: resolve-tag
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -145,6 +151,7 @@ jobs:
     name: Build cdylib - ${{ matrix.target_key }}
     needs: resolve-tag
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -328,6 +335,7 @@ jobs:
     name: Create Release
     needs: [resolve-tag, build-release, build-cdylib]
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
