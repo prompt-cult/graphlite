@@ -11,10 +11,15 @@ env:
   RUSTFLAGS: -Dwarnings
   RUSTDOCFLAGS: -Dwarnings
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint and Format Check
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -58,6 +63,7 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -130,6 +136,7 @@ jobs:
   security-audit:
     name: Security Audit
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -148,6 +155,7 @@ jobs:
   check-code-patterns:
     name: Code Pattern Checks
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -207,6 +215,7 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
     # Only run coverage on main branch or manual dispatch to save CI time
     # Coverage is expensive (5-15 min) and not needed for every PR
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
